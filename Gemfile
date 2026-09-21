@@ -39,7 +39,7 @@ gem "rack-cors"
 # For connection to S3 storage (e.g. MinIO)
 gem "aws-sdk-s3"
 
-gem "json", "~> 2.7.2"
+gem "json", "~> 3.0.2"
 
 gem "ruby-mp3info"
 
