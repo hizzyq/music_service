@@ -1,41 +1,116 @@
-require "mp3info"
+require "open3"
+require "json"
 
 class TrackMetadataExtractor
   def self.extract(file_key)
-    temp_file = Tempfile.new(["track_upload", ".mp3"], binmode: true)
+    ext = File.extname(file_key).presence || ".audio"
+    temp_file = Tempfile.new(["track_upload", ext], binmode: true)
+    cover_file = Tempfile.new(["cover_art", ".jpg"], binmode: true)
 
     begin
-      # Скачиваем файл из MinIO во временный файл на диске
+      # 1. Скачиваем аудиофайл из MinIO во временный файл
       S3_CLIENT.get_object(
         bucket: S3_BUCKET_NAME,
         key: file_key,
         response_target: temp_file.path
       )
 
-      Mp3Info.open(temp_file.path) do |mp3|
-        # Извлекаем данные из ID3v1 или ID3v2 с фоллбэками
-        title = (mp3.tag.title || mp3.tag2["TIT2"] || File.basename(file_key, ".*")).to_s.strip
-        artist_name = (mp3.tag.artist || mp3.tag2["TPE1"] || "Unknown Artist").to_s.strip
-        album_title = (mp3.tag.album || mp3.tag2["TALB"] || "Single").to_s.strip
+      # 2. Извлекаем метаданные через ffprobe (JSON output)
+      probe_cmd = [
+        "ffprobe", "-v", "quiet",
+        "-print_format", "json",
+        "-show_format", "-show_streams",
+        temp_file.path
+      ]
+      stdout, _stderr, status = Open3.capture3(*probe_cmd)
+      probe_data = status.success? ? JSON.parse(stdout) : {}
 
-        # Номер трека может быть в формате "3" или "3/12"
-        raw_track_num = mp3.tag.tracknum || mp3.tag2["TRCK"]
-        track_number = raw_track_num.to_s.split("/").first.to_i
-        track_number = 1 if track_number.zero?
+      format_info = probe_data["format"] || {}
+      tags = format_info["tags"] || {}
+      # Нормализуем ключи тегов к нижнему регистру (FLAC использует капсом TITLE, MP3 в lowercase)
+      normalized_tags = tags.transform_keys(&:downcase)
 
-        duration = mp3.length.round
+      raw_title = normalized_tags["title"].presence || File.basename(file_key, ".*").sub(/^[a-f0-9\-]+_/, "")
+      title = raw_title.to_s.strip
+      artist_name = (normalized_tags["artist"] || normalized_tags["album_artist"] || "Unknown Artist").to_s.strip
+      album_title = (normalized_tags["album"] || "Single").to_s.strip
 
-        {
-          title: title,
-          artist_name: artist_name,
-          album_title: album_title,
-          track_number: track_number,
-          duration: duration
-        }
+      raw_track_num = normalized_tags["track"] || normalized_tags["tracknumber"] || 1
+      track_number = raw_track_num.to_s.split("/").first.to_i
+      track_number = 1 if track_number.zero?
+
+      raw_year = normalized_tags["date"] || normalized_tags["year"]
+      release_year = raw_year.to_s[/\d{4}/]&.to_i
+
+      duration = (format_info["duration"].to_f).round
+      duration = 1 if duration.zero?
+
+      # 3. Извлекаем обложку альбома (если есть встроенный арт)
+      cover_key = nil
+      has_video_stream = (probe_data["streams"] || []).any? { |s| s["codec_type"] == "video" }
+      if has_video_stream
+        cover_cmd = ["ffmpeg", "-y", "-i", temp_file.path, "-an", "-vcodec", "copy", cover_file.path]
+        _cout, _cerr, cstatus = Open3.capture3(*cover_cmd)
+        if cstatus.success? && File.size?(cover_file.path).to_i > 100
+          cover_key = "covers/#{SecureRandom.uuid}.jpg"
+          File.open(cover_file.path, "rb") do |f|
+            S3_CLIENT.put_object(
+              bucket: S3_BUCKET_NAME,
+              key: cover_key,
+              body: f,
+              content_type: "image/jpeg"
+            )
+          end
+        end
       end
+
+      # 4. Генерируем 100 точек для звуковой волны (Waveform Peaks)
+      waveform = generate_waveform(temp_file.path)
+
+      {
+        title: title,
+        artist_name: artist_name,
+        album_title: album_title,
+        track_number: track_number,
+        duration: duration,
+        release_year: release_year,
+        cover_key: cover_key,
+        waveform: waveform
+      }
     ensure
       temp_file.close
-      temp_file.unlink # Удаляем временный файл с диска
+      temp_file.unlink
+      cover_file.close
+      cover_file.unlink
     end
+  end
+
+  private
+
+  def self.generate_waveform(file_path, points = 100)
+    # Даунсемплим в моно PCM 1000 Гц 16-бит
+    cmd = ["ffmpeg", "-i", file_path, "-ac", "1", "-filter:a", "aresample=1000", "-f", "s16le", "-"]
+    raw_pcm, _stderr, status = Open3.capture3(*cmd)
+    return Array.new(points, 0.1) unless status.success? && !raw_pcm.empty?
+
+    samples = raw_pcm.unpack("s*")
+    return Array.new(points, 0.1) if samples.empty?
+
+    chunk_size = (samples.size / points.to_f).ceil
+    peaks = samples.each_slice(chunk_size).map do |chunk|
+      max_val = chunk.map(&:abs).max || 0
+      [(max_val / 32768.0).round(3), 0.05].max # минимум 0.05 чтобы волна визуально не схлопывалась в 0
+    end
+
+    # Нормализуем длину ровно до заданного количества точек
+    if peaks.size < points
+      peaks += Array.new(points - peaks.size, 0.05)
+    else
+      peaks = peaks.first(points)
+    end
+    peaks
+  rescue => e
+    Rails.logger.error "Waveform generation failed: #{e.message}"
+    Array.new(points, 0.1)
   end
 end

@@ -32,7 +32,8 @@ class TracksController < ApplicationController
       track_number: track.track_number,
       artist: track.artist&.name,
       album: track.album&.title,
-      stream_url: track.stream_url
+      cover_url: track.cover_url,
+      waveform: track.waveform
     }
   end
 end
