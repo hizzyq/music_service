@@ -21,7 +21,9 @@ class PlaylistsController < ApplicationController
           duration: t.duration,
           artist: t.artist&.name,
           album: t.album&.title,
-          cover_url: t.cover_url
+          cover_url: t.cover_url,
+          waveform: t.waveform,
+          format: File.extname(t.file_key).delete('.').upcase.presence || 'MP3'
         }
       end
     }

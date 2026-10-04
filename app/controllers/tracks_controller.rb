@@ -33,7 +33,8 @@ class TracksController < ApplicationController
       artist: track.artist&.name,
       album: track.album&.title,
       cover_url: track.cover_url,
-      waveform: track.waveform
+      waveform: track.waveform,
+      format: File.extname(track.file_key).delete('.').upcase.presence || 'MP3'
     }
   end
 end

@@ -13,7 +13,8 @@ class FavoritesController < ApplicationController
         artist: t.artist&.name,
         album: t.album&.title,
         cover_url: t.cover_url,
-        waveform: t.waveform
+        waveform: t.waveform,
+        format: File.extname(t.file_key).delete('.').upcase.presence || 'MP3'
       }
     }
   end
