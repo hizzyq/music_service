@@ -1,11 +1,2 @@
-# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
-
-one:
-  email: MyString
-  password_digest: MyString
-  role: 1
-
-two:
-  email: MyString
-  password_digest: MyString
-  role: 1
+# test/fixtures/users.yml
+# Test fixtures intentionally kept clean for explicit in-test creation

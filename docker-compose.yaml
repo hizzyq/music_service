@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: music-postgres
     environment:
       POSTGRES_DB: music
@@ -12,7 +12,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   minio:
-    image: minio/minio:latest
+    image: elestio/minio:latest
     container_name: minio-storage
     command: server /data --console-address ":9001"
     environment:

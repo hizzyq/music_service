@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: music-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: music
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d music"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: elestio/minio:latest
+    container_name: minio-storage-prod
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: "00000000"
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_prod_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.alpine
+    container_name: music-backend-prod
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    environment:
+      RAILS_ENV: production
+      RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: 5740445a9be46bb6f50b91e779a54e9bc359f4935471bba770e0a5c4cf4b5f884a2ee6f83965b3297a73a3aa5fe8442be4b067a9a3bba2bb212ef57b8c2be232
+      DB_HOST: postgres
+      DB_PORT: 5432
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: music
+      S3_ACCESS_KEY_ID: admin
+      S3_SECRET_ACCESS_KEY: "00000000"
+    command: >
+      sh -c "bundle exec rails db:prepare db:seed && bundle exec rails server -b 0.0.0.0 -p 3000"
+
+volumes:
+  postgres_prod_data:
+  minio_prod_data:

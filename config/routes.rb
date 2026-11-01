@@ -16,6 +16,7 @@ Rails.application.routes.draw do
   end
 
   resources :history, only: [:index, :create]
+  resources :recommendations, only: [:index]
 
   # Избранное (1-клик добавление/удаление)
   get  "/favorites",          to: "favorites#index"

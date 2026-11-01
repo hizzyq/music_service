@@ -91,26 +91,41 @@ class TrackMetadataExtractor
     # Даунсемплим в моно PCM 1000 Гц 16-бит
     cmd = ["ffmpeg", "-i", file_path, "-ac", "1", "-filter:a", "aresample=1000", "-f", "s16le", "-"]
     raw_pcm, _stderr, status = Open3.capture3(*cmd)
-    return Array.new(points, 0.1) unless status.success? && !raw_pcm.empty?
+    return Array.new(points, 0.08) unless status.success? && !raw_pcm.empty?
 
     samples = raw_pcm.unpack("s*")
-    return Array.new(points, 0.1) if samples.empty?
+    return Array.new(points, 0.08) if samples.empty?
 
     chunk_size = (samples.size / points.to_f).ceil
-    peaks = samples.each_slice(chunk_size).map do |chunk|
-      max_val = chunk.map(&:abs).max || 0
-      [(max_val / 32768.0).round(3), 0.05].max # минимум 0.05 чтобы волна визуально не схлопывалась в 0
+    chunks = samples.each_slice(chunk_size).to_a
+
+    # Вычисляем RMS (Root Mean Square) энергию для каждого бакета вместо плоского пика
+    rms_values = chunks.map do |chunk|
+      next 0.0 if chunk.empty?
+      sum_sq = chunk.sum { |s| s * s }
+      Math.sqrt(sum_sq.to_f / chunk.size)
+    end
+
+    max_rms = rms_values.max.to_f
+    return Array.new(points, 0.08) if max_rms <= 0
+
+    # Относительная нормализация к пику трека с плавной степенной кривой (1.15)
+    # чтобы тихие участки (интро/куплеты) и кульминации (дропы/припевы) были четко различимы
+    peaks = rms_values.map do |rms|
+      ratio = rms / max_rms
+      scaled = (ratio**1.15).round(3)
+      [[scaled, 0.08].max, 1.0].min
     end
 
     # Нормализуем длину ровно до заданного количества точек
     if peaks.size < points
-      peaks += Array.new(points - peaks.size, 0.05)
+      peaks += Array.new(points - peaks.size, 0.08)
     else
       peaks = peaks.first(points)
     end
     peaks
   rescue => e
     Rails.logger.error "Waveform generation failed: #{e.message}"
-    Array.new(points, 0.1)
+    Array.new(points, 0.08)
   end
 end
