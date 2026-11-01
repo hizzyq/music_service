@@ -147,7 +147,7 @@ GEM
       rdoc (>= 4.0.0)
       reline (>= 0.4.2)
     jmespath (1.6.2)
-    json (2.7.6)
+    json (3.1.0)
     jwt (3.3.0)
       base64
     kamal (2.12.0)
@@ -386,7 +386,7 @@ DEPENDENCIES
   bundler-audit
   debug
   image_processing (~> 1.2)
-  json (~> 2.7.2)
+  json
   jwt
   kamal
   pg (~> 1.1)
@@ -458,7 +458,7 @@ CHECKSUMS
   io-console (0.9.4) sha256=a403304f32928ee85e56d457b4612ca43f2703b561a3258844992bd24085fbb1
   irb (1.18.0) sha256=de9454a0703a54704b9811a5ef31a60c86949fbf4013fcf244fabc7c775248e3
   jmespath (1.6.2) sha256=238d774a58723d6c090494c8879b5e9918c19485f7e840f2c1c7532cf84ebcb1
-  json (2.7.6) sha256=2d9aba03af3167401e8cf8de50daed5b5aec5b5a622f15c4b7ce2fd8d49a070f
+  json (3.1.0) sha256=3ce7ccf8fde58960177a3a756c31f292a4c1e1dedee884547096a5b0604e3bd8
   jwt (3.3.0) sha256=44cc34fbc341c148233cf66641522b4bce0dfb1ce55e8073f05c56f44f4ee546
   kamal (2.12.0) sha256=c51d1ab085e515470f98d0c0f043637122b5ebf76e8b610cb1fbbed0b7f9b8fa
   language_server-protocol (3.17.0.6) sha256=5ef2c0c138f8267e1bc631d3328347d354f96724b0af22f2c79516120443b7f0
