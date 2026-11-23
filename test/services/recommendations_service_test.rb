@@ -50,6 +50,7 @@ class RecommendationsServiceTest < ActiveSupport::TestCase
 
     assert rec.present?, "Track 3 should be recommended to Alice via Bob's history"
     assert rec[:score] >= 25
+    assert_match(/Disco ML/, rec[:reason])
   end
 
   test "respects requested limit" do

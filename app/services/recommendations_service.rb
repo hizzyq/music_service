@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
+require "disco"
+
 class RecommendationsService
+  DEFAULT_FACTORS = 8
+
   def self.call(user:, limit: 20)
     new(user, limit).call
   end
@@ -18,19 +22,21 @@ class RecommendationsService
     favorite_ids = user_favorite_track_ids
     user_known_tracks = (listened_ids + favorite_ids).to_set
 
-    # 1. Сбор профиля предпочтений пользователя (артисты)
-    preferred_artist_counts = user_preferred_artists(listened_ids, favorite_ids)
+    # 1. Collaborative Filtering via Disco ML gem (Matrix Factorization)
+    disco_recs = run_disco_collaborative
+    disco_recs.each do |rec|
+      track_id = rec[:item_id]
+      next if user_known_tracks.include?(track_id)
 
-    # 2. Collaborative Filtering (Поиск схожих слушателей)
-    if user_known_tracks.any?
-      collaborative_map = find_collaborative_tracks(user_known_tracks)
-      collaborative_map.each do |track_id, count|
-        candidate_scores[track_id] += count * 25
-        candidate_reasons[track_id] ||= "Нравится слушателям со схожим вкусом"
-      end
+      # Disco returns dot-product scores for latent factors; normalize and boost to 30..95 range
+      raw_score = rec[:score].to_f
+      scaled_score = [(raw_score * 1000).round + 30, 95].min
+      candidate_scores[track_id] = [candidate_scores[track_id], scaled_score].max
+      candidate_reasons[track_id] ||= "Нравится слушателям со схожим вкусом (Disco ML)"
     end
 
-    # 3. Content-Based (Треки любимых артистов, которые пользователь еще не слушал)
+    # 2. Content-Based Preferences (Любимые артисты пользователя)
+    preferred_artist_counts = user_preferred_artists(listened_ids, favorite_ids)
     if preferred_artist_counts.any?
       artist_tracks = Track.joins(:album)
                            .where(albums: { artist_id: preferred_artist_counts.keys })
@@ -40,12 +46,12 @@ class RecommendationsService
       artist_tracks.each do |t|
         artist_id = t.album&.artist_id
         weight = preferred_artist_counts[artist_id] || 1
-        candidate_scores[t.id] += weight * 20
+        candidate_scores[t.id] += [weight * 20, 40].min
         candidate_reasons[t.id] ||= "Потому что вы слушали #{t.artist&.name || 'этого исполнителя'}"
       end
     end
 
-    # 4. Global Trends (Популярные треки платформы)
+    # 3. Global Trends (Популярные треки платформы)
     trending_map = platform_trending_tracks
     trending_map.each do |track_id, count|
       next if user_known_tracks.include?(track_id)
@@ -54,7 +60,7 @@ class RecommendationsService
       candidate_reasons[track_id] ||= "В трендах платформы"
     end
 
-    # 5. Cold-start / Fallback (если кандидатов мало или у пользователя нет истории)
+    # 4. Cold-start / Fallback (если кандидатов мало или у пользователя нет истории)
     if candidate_scores.size < @limit
       remaining = @limit - candidate_scores.size
       fallback_tracks = Track.where.not(id: (user_known_tracks.to_a + candidate_scores.keys))
@@ -67,7 +73,7 @@ class RecommendationsService
       end
     end
 
-    # 6. Если в каталоге вообще мало треков и всё прослушано, разрешаем повторные рекомендации
+    # 5. Если в каталоге вообще мало треков и всё прослушано, разрешаем повторные рекомендации
     if candidate_scores.empty?
       Track.order(created_at: :desc).limit(@limit).each do |t|
         candidate_scores[t.id] = 10
@@ -75,7 +81,7 @@ class RecommendationsService
       end
     end
 
-    # 7. Сортировка по скорингу и загрузка связанных записей
+    # 6. Сортировка по скорингу и загрузка связанных записей
     sorted_track_ids = candidate_scores.sort_by { |_id, score| -score }.map(&:first).first(@limit)
     tracks_by_id = Track.includes(:album, :artist).where(id: sorted_track_ids).index_by(&:id)
 
@@ -114,25 +120,30 @@ class RecommendationsService
          .tally
   end
 
-  def find_collaborative_tracks(user_track_ids)
-    # Ищем других пользователей с пересечениями
-    similar_users = ListeningHistory.where(track_id: user_track_ids.to_a)
-                                    .where.not(user_id: user.id)
-                                    .group(:user_id)
-                                    .order(Arel.sql("count(*) DESC"))
-                                    .limit(10)
-                                    .count
-                                    .keys
+  def run_disco_collaborative
+    history_events = ListeningHistory.select(:user_id, :track_id).map do |h|
+      { user_id: h.user_id, item_id: h.track_id }
+    end
 
-    return {} if similar_users.empty?
+    favorite_events = PlaylistTrack.joins(:playlist)
+                                   .select("playlists.user_id", :track_id)
+                                   .map do |pt|
+      { user_id: pt.user_id, item_id: pt.track_id }
+    end
 
-    # Треки, которые слушали схожие пользователи
-    ListeningHistory.where(user_id: similar_users)
-                    .where.not(track_id: user_track_ids.to_a)
-                    .group(:track_id)
-                    .order(Arel.sql("count(*) DESC"))
-                    .limit(30)
-                    .count
+    dataset = (history_events + favorite_events).uniq
+    return [] if dataset.size < 2
+
+    # Choose reasonable number of factors for matrix factorization
+    factors = [dataset.size / 2, DEFAULT_FACTORS].min
+    factors = [factors, 1].max
+
+    recommender = Disco::Recommender.new(factors: factors)
+    recommender.fit(dataset)
+    recommender.user_recs(user.id, count: limit * 2)
+  rescue StandardError => e
+    Rails.logger.warn("Disco collaborative recommendation error: #{e.message}")
+    []
   end
 
   def platform_trending_tracks
